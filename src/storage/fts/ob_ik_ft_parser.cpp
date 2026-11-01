@@ -134,11 +134,12 @@ int ObIKFTParser::process_one_char(TokenizeContext &ctx,
                                    const ObFTCharUtil::CharType type)
 {
   int ret = OB_SUCCESS;
+  UNUSED(ch);
+  UNUSED(char_len);
+  UNUSED(type);
   // proces by char with all segmenters
-  for (ObList<ObIIKProcessor *, ObIAllocator>::iterator iter = segmenters_.begin();
-       OB_SUCC(ret) && iter != segmenters_.end();
-       iter++) {
-    if (OB_FAIL((*iter)->process(ctx))) {
+  for (int64_t i = 0; OB_SUCC(ret) && i < segmenter_cnt_; ++i) {
+    if (OB_FAIL(segmenters_[i]->process(ctx))) {
     }
   }
   return ret;
@@ -327,14 +328,17 @@ int ObIKFTParser::init_segmenter(const ObFTParserParam &param)
     ret = OB_ALLOCATE_MEMORY_FAILED;
   } else if (OB_ISNULL(surrogate_seg = OB_NEWx(ObIKSurrogateProcessor, &allocator_))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
-  } else if (OB_FAIL(segmenters_.push_back(letter_seg))) {
-  } else if (FALSE_IT(letter_seg = nullptr)) {
-  } else if (OB_FAIL(segmenters_.push_back(cnqsg))) {
-  } else if (FALSE_IT(cnqsg = nullptr)) {
-  } else if (OB_FAIL(segmenters_.push_back(cjksg))) {
-  } else if (FALSE_IT(cjksg = nullptr)) {
-  } else if (OB_FAIL(segmenters_.push_back(surrogate_seg))) {
-  } else if (OB_FALSE_IT(surrogate_seg = nullptr)) {
+  } else if (OB_UNLIKELY(segmenter_cnt_ + 4 > MAX_SEGMENTER_CNT)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    segmenters_[segmenter_cnt_++] = letter_seg;
+    letter_seg = nullptr;
+    segmenters_[segmenter_cnt_++] = cnqsg;
+    cnqsg = nullptr;
+    segmenters_[segmenter_cnt_++] = cjksg;
+    cjksg = nullptr;
+    segmenters_[segmenter_cnt_++] = surrogate_seg;
+    surrogate_seg = nullptr;
   }
   // push back by order, quantifier is before cjk
 
@@ -354,13 +358,15 @@ void ObIKFTParser::reset()
     allocator_.free(ctx_);
   }
 
-  for (ObIIKProcessor *segmenter : segmenters_) {
+  for (int64_t i = 0; i < segmenter_cnt_; ++i) {
+    ObIIKProcessor *segmenter = segmenters_[i];
     if (!OB_ISNULL(segmenter)) {
       segmenter->~ObIIKProcessor();
       allocator_.free(segmenter);
     }
+    segmenters_[i] = nullptr;
   }
-  segmenters_.clear();
+  segmenter_cnt_ = 0;
 
   cache_main_.reset();
   cache_quan_.reset();

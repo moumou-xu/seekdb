@@ -40,7 +40,7 @@ public:
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
         hub_(hub),
-        segmenters_(allocator_),
+        segmenter_cnt_(0),
         cache_main_(allocator),
         cache_quan_(allocator),
         cache_stop_(allocator),
@@ -48,6 +48,9 @@ public:
         dict_quan_(nullptr),
         dict_stop_(nullptr)
   {
+    for (int64_t i = 0; i < MAX_SEGMENTER_CNT; ++i) {
+      segmenters_[i] = nullptr;
+    }
   }
 
   virtual ~ObIKFTParser() { reset(); }
@@ -90,13 +93,17 @@ private:
 
 private:
   static constexpr int SEGMENT_LIMIT = 1000;
+  // The processor list is fixed at build time, so a plain array avoids the
+  // per-character linked-list traversal in the segmentation hot path.
+  static constexpr int64_t MAX_SEGMENTER_CNT = 4;
   ObIAllocator &allocator_;
   bool is_inited_;
 
   ObCollationType coll_type_;
   TokenizeContext *ctx_;
   ObFTDictHub *hub_;
-  ObList<ObIIKProcessor *, ObIAllocator> segmenters_;
+  ObIIKProcessor *segmenters_[MAX_SEGMENTER_CNT];
+  int64_t segmenter_cnt_;
 
   // For now there's no change of dict in one query, so we can pin dict this level.
   ObFTCacheRangeContainer cache_main_;

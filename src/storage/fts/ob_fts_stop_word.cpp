@@ -27,6 +27,78 @@ namespace oceanbase
 namespace storage
 {
 
+namespace
+{
+// Code points that never carry a lower case mapping. Only case-less scripts
+// are listed, so a positive answer is always safe for skipping conversion.
+bool is_caseless_code_point(const uint32_t cp)
+{
+  return (cp >= 0x2000 && cp <= 0x206F)     // general punctuation
+         || (cp >= 0x3000 && cp <= 0x303F)  // CJK symbols and punctuation
+         || (cp >= 0x3040 && cp <= 0x309F)  // hiragana
+         || (cp >= 0x30A0 && cp <= 0x30FF)  // katakana
+         || (cp >= 0x3100 && cp <= 0x312F)  // bopomofo
+         || (cp >= 0x3400 && cp <= 0x4DBF)  // CJK extension A
+         || (cp >= 0x4E00 && cp <= 0x9FFF)  // CJK unified ideographs
+         || (cp >= 0xAC00 && cp <= 0xD7A3)  // hangul syllables
+         || (cp >= 0xF900 && cp <= 0xFAFF)  // CJK compatibility ideographs
+         || (cp >= 0xFF01 && cp <= 0xFF20)  // fullwidth punctuation
+         || (cp >= 0xFF3B && cp <= 0xFF40)
+         || (cp >= 0xFF5B && cp <= 0xFF65);
+}
+
+// Fast check whether lower-casing the token would be a no-op. Tokens made of
+// CJK/kana/hangul and ASCII text without upper case letters are the common
+// case for Chinese documents, and lower-casing them only copies the bytes into
+// the parser arena and walks the case table without changing anything.
+bool is_caseless_string(const char *ptr, const int64_t len)
+{
+  bool caseless = true;
+  int64_t i = 0;
+  while (caseless && i < len) {
+    const unsigned char c = static_cast<unsigned char>(ptr[i]);
+    if (c < 0x80) {
+      caseless = !(c >= 'A' && c <= 'Z');
+      ++i;
+    } else {
+      uint32_t cp = 0;
+      int64_t extra = 0;
+      if (0xC0 == (c & 0xE0)) {
+        cp = c & 0x1F;
+        extra = 1;
+      } else if (0xE0 == (c & 0xF0)) {
+        cp = c & 0x0F;
+        extra = 2;
+      } else if (0xF0 == (c & 0xF8)) {
+        cp = c & 0x07;
+        extra = 3;
+      } else {
+        caseless = false;
+      }
+      if (caseless) {
+        if (i + extra >= len) {
+          caseless = false;
+        } else {
+          for (int64_t k = 1; k <= extra && caseless; ++k) {
+            const unsigned char cc = static_cast<unsigned char>(ptr[i + k]);
+            if (0x80 != (cc & 0xC0)) {
+              caseless = false;
+            } else {
+              cp = (cp << 6) | (cc & 0x3F);
+            }
+          }
+          if (caseless && !is_caseless_code_point(cp)) {
+            caseless = false;
+          }
+        }
+        i += extra + 1;
+      }
+    }
+  }
+  return caseless;
+}
+} // namespace
+
 ////////////////////////////////////////////////////////////////////////////////
 // class ObStopWordChecker
 ObStopWordChecker::~ObStopWordChecker()
@@ -164,15 +236,21 @@ int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
   if (OB_UNLIKELY(src.empty())) {
     ret = OB_INVALID_ARGUMENT;
   } else if (flag_.casedown()) {
-    ObString dst_str;
-    if (OB_FAIL(ObCharset::tolower(
-                    word_meta_.get_collation_type(),
-                    src.get_word().get_string(),
-                    dst_str,
-                    allocator_))) {
+    const ObString &src_str = src.get_word().get_string();
+    if (is_caseless_string(src_str.ptr(), src_str.length())) {
+      // nothing to convert: keep the source view and skip the arena copy
+      dst = src;
     } else {
-      ObFTWord tmp(dst_str.length(), dst_str.ptr(), word_meta_);
-      dst = tmp;
+      ObString dst_str;
+      if (OB_FAIL(ObCharset::tolower(
+                      word_meta_.get_collation_type(),
+                      src_str,
+                      dst_str,
+                      allocator_))) {
+      } else {
+        ObFTWord tmp(dst_str.length(), dst_str.ptr(), word_meta_);
+        dst = tmp;
+      }
     }
   } else {
     dst = src;
