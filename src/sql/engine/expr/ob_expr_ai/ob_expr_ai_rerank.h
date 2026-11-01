@@ -27,6 +27,17 @@ namespace oceanbase
 {
 namespace sql 
 {
+
+// One rerank result, restored to the position of the original document.
+struct ObRerankResultItem
+{
+  int64_t global_index_;   // index of the document in the input array
+  int64_t sequence_;       // appearance order, used to keep the sort stable
+  float score_;            // score returned by the model
+  common::ObJsonNode *score_node_;   // score json value returned by the model
+  common::ObJsonNode *result_node_;  // whole result object returned by the model
+};
+
 class ObExprAIRerank : public ObFuncExprOperator 
 {
 public:
@@ -49,27 +60,44 @@ private:
                                   common::ObString &query, 
                                   common::ObJsonArray *document_array, 
                                   common::ObJsonArray *&result_array);
-  
-  static int eval_ai_rerank_with_doc_key(const ObExpr &expr, ObEvalCtx &ctx, common::ObIAllocator &allocator,
-                                         common::ObString &model_id, common::ObString &query, common::ObJsonArray *document_array,
-                                         common::ObString &doc_key, const common::ObAIFuncExprInfo &info, const share::ObAiModelEndpointInfo &endpoint_info, ObDatum &res);
-  static int get_doc_array_from_documents_array_with_key(ObIAllocator &allocator, ObJsonArray *document_object_array, ObString &doc_key, ObJsonArray *&doc_array);
-  static int sort_document_array_by_model_result(common::ObIAllocator &allocator, common::ObJsonArray *document_array, common::ObJsonArray *model_result_array, common::ObJsonArray *&sorted_document_array);
-  static int construct_config_json(common::ObIAllocator &allocator, int64_t top_k, int64_t return_doc, common::ObJsonObject *&config_json);
-  static int construct_batch_document_array(common::ObIAllocator &allocator, common::ObJsonArray *document_array, int64_t start_idx, int64_t end_idx, common::ObJsonArray *&batch_document_array);
-  static int batch_result_add_base(common::ObIAllocator &allocator, common::ObJsonArray *array, int64_t start_idx);
-  static int compact_json_array_by_key(common::ObIAllocator &allocator, common::ObJsonArray *array1, common::ObJsonArray *array2, common::ObString &score_key, common::ObJsonArray *&compact_array);
+  // Send one request that carries [start_idx, end_idx) of the documents and
+  // append every returned item with its global index.
+  static int eval_ai_rerank_batch(common::ObIAllocator &allocator,
+                                  const common::ObAIFuncExprInfo &info,
+                                  const share::ObAiModelEndpointInfo &endpoint_info,
+                                  common::ObArray<common::ObString> &header_array,
+                                  common::ObString &query,
+                                  common::ObArray<common::ObJsonNode *> &document_nodes,
+                                  const int64_t start_idx,
+                                  const int64_t end_idx,
+                                  common::ObArray<ObRerankResultItem> &result_items,
+                                  int64_t &sequence);
+  static int get_document_texts(common::ObIAllocator &allocator,
+                                common::ObJsonArray *document_array,
+                                const bool has_doc_key,
+                                common::ObString &doc_key,
+                                common::ObArray<common::ObJsonNode *> &document_nodes);
+  static int extract_score(common::ObIAllocator &allocator,
+                           common::ObJsonNode *score_node,
+                           float &score);
+  static int build_result_array(common::ObIAllocator &allocator,
+                                common::ObJsonArray *document_array,
+                                const bool has_doc_key,
+                                common::ObArray<ObRerankResultItem> &result_items,
+                                common::ObJsonArray *&result_array);
+  static void sort_result_items(common::ObArray<ObRerankResultItem> &result_items);
   static constexpr int MODEL_IDX = 0;
   static constexpr int QUERY_IDX = 1;
   static constexpr int DOCUMENTS_IDX = 2;
   static constexpr int DOC_KEY_IDX = 3;
+  static constexpr int64_t MAX_BATCH_SIZE = 20;
   static constexpr char MODEL_SCORE_KEY[20] = "_model_score";
   static constexpr char INDEX_KEY[20] = "index";
   static constexpr char SCORE_KEY[20] = "relevance_score";
+  static constexpr char SCORE_KEY_ALIAS[10] = "score";
   DISALLOW_COPY_AND_ASSIGN(ObExprAIRerank);
 };
 
 } // namespace sql
 } // namespace oceanbase
 #endif // OCEANBASE_SQL_OB_EXPR_AI_RERANK_H_
-  
